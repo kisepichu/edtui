@@ -227,16 +227,15 @@ fn move_word_backward(state: &mut EditorState) {
     let start_char_class = CharacterClass::from(state.lines.get(start_index));
 
     for (next_char, i) in state.lines.iter().from(start_index).rev() {
-        // Break loop if it reaches the start of the line
-        if i.col == 0 {
-            start_index = i;
-            break;
-        }
         // Break loop if characters don't belong to the same class
         if CharacterClass::from(next_char) != start_char_class {
             break;
         }
         start_index = i;
+        // Break loop if it reaches the start of the line
+        if i.col == 0 {
+            break;
+        }
     }
 
     state.cursor = start_index;
@@ -1045,6 +1044,20 @@ mod tests {
 
         MoveWordBackward(1).execute(&mut state);
         assert_eq!(state.cursor, Index2::new(0, 0));
+    }
+
+    #[test]
+    fn test_move_word_backward_to_word_at_second_column() {
+        // Vim: `b` stops at the start of a word at column 1 when column 0
+        // has another class: from `c` of `(abc` at `a`, from `」` of
+        // `「日本」` at `日`, from `本` of `a日本` at `日`.
+        for (line, col) in [("(abc", 3), ("「日本」", 3), ("a日本", 2)] {
+            let mut state = EditorState::new(Lines::from(line));
+            state.cursor = Index2::new(0, col);
+
+            MoveWordBackward(1).execute(&mut state);
+            assert_eq!(state.cursor, Index2::new(0, 1), "{line}");
+        }
     }
 
     #[test]
