@@ -350,6 +350,24 @@ mod tests {
     }
 
     #[test]
+    fn test_cursor_screen_position_wrapped_after_grapheme_cluster_wider_than_row() {
+        // `a` with four halfwidth voiced sound marks is one cluster of nine
+        // columns; on rows of four it gets the second row, and `y` the third.
+        let mut state = EditorState::new(Lines::from(format!("xa{}y", "\u{ff9e}".repeat(4))));
+        state.cursor = Index2::new(0, 6);
+
+        let area = Rect::new(0, 0, 4, 5);
+        let mut buffer = Buffer::empty(area);
+        EditorView::new(&mut state)
+            .wrap(true)
+            .render(area, &mut buffer);
+
+        let pos = state.cursor_screen_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 2));
+        assert_eq!(buffer[pos].symbol(), "y");
+    }
+
+    #[test]
     fn test_single_line_mode_blocks_line_break() {
         use crate::actions::LineBreak;
 

@@ -27,7 +27,8 @@ impl LineWrapper {
     }
 
     /// Wraps a line by grapheme clusters, so that a cluster is never split
-    /// across two rows.
+    /// across two rows. A row always takes its first cluster, even one wider
+    /// than `max_width`, which ratatui clips.
     pub(crate) fn wrap_line(line: &[char], max_width: usize, tab_width: usize) -> Vec<Vec<char>> {
         let line: String = line.iter().collect();
         let mut lines = Vec::new();
@@ -37,7 +38,7 @@ impl LineWrapper {
         for grapheme in line.graphemes(true) {
             let width = grapheme_width(grapheme, tab_width);
 
-            if line_width + width > max_width {
+            if line_width > 0 && line_width + width > max_width {
                 lines.push(current_line.clone());
                 current_line.clear();
                 line_width = 0;
@@ -54,6 +55,8 @@ impl LineWrapper {
         lines
     }
 
+    /// Wraps spans by grapheme clusters, by the same rule as
+    /// [`Self::wrap_line`].
     pub(crate) fn wrap_spans(
         spans: Vec<Span<'_>>,
         max_width: usize,
@@ -67,22 +70,27 @@ impl LineWrapper {
             // If adding this span exceeds the max width, handle wrapping
             if current_line_width + span_width(&span, tab_width) > max_width {
                 let mut remaining_span = span.clone();
-                let mut split_at = max_width - current_line_width;
+                let mut row_width = current_line_width;
 
-                while span_width(&remaining_span, tab_width) > split_at {
+                while row_width + span_width(&remaining_span, tab_width) > max_width {
                     let (fitting_part, rest) =
-                        Self::split_span_at(remaining_span, split_at, tab_width);
+                        Self::split_span_at(remaining_span, row_width, max_width, tab_width);
+                    if rest.content.is_empty() {
+                        // A cluster wider than the row, alone on it
+                        remaining_span = fitting_part;
+                        break;
+                    }
                     current_line.push(fitting_part.clone());
                     wrapped_lines.push(current_line.clone());
 
                     // Prepare for the next line
                     current_line.clear();
                     remaining_span = rest;
-                    split_at = max_width;
+                    row_width = 0;
                 }
 
                 // Add remaining part to the current line
-                current_line_width = span_width(&remaining_span, tab_width);
+                current_line_width = row_width + span_width(&remaining_span, tab_width);
                 current_line.push(remaining_span);
             } else {
                 // No wrapping needed, just add the span
@@ -100,22 +108,35 @@ impl LineWrapper {
     }
 
     /// Splits a string before the first grapheme cluster that does not fit
-    /// into `split_at` columns.
-    fn split_str_at(s: Cow<'_, str>, split_at: usize, tab_width: usize) -> (String, String) {
-        let mut current_width = 0;
+    /// on a row already `row_width` of `max_width` columns wide. A row that
+    /// is still blank takes its first cluster anyway, so that wrapping always
+    /// advances.
+    fn split_str_at(
+        s: Cow<'_, str>,
+        row_width: usize,
+        max_width: usize,
+        tab_width: usize,
+    ) -> (String, String) {
+        let mut current_width = row_width;
         for (i, grapheme) in s.grapheme_indices(true) {
-            current_width += grapheme_width(grapheme, tab_width);
-            if current_width > split_at {
+            let width = grapheme_width(grapheme, tab_width);
+            if current_width > 0 && current_width + width > max_width {
                 let (a, b) = s.split_at(i);
                 return (a.to_string(), b.to_string());
             }
+            current_width += width;
         }
 
         (s.to_string(), String::new())
     }
 
-    fn split_span_at(span: Span, split_at: usize, tab_width: usize) -> (Span, Span) {
-        let (a, b) = Self::split_str_at(span.content, split_at, tab_width);
+    fn split_span_at(
+        span: Span,
+        row_width: usize,
+        max_width: usize,
+        tab_width: usize,
+    ) -> (Span, Span) {
+        let (a, b) = Self::split_str_at(span.content, row_width, max_width, tab_width);
         (Span::styled(a, span.style), Span::styled(b, span.style))
     }
 }
@@ -147,7 +168,7 @@ mod tests {
     #[test]
     fn test_split_span_at_with_emoji() {
         let span = Span::raw("🙂!");
-        let (left, right) = LineWrapper::split_span_at(span, 2, 0);
+        let (left, right) = LineWrapper::split_span_at(span, 0, 2, 0);
 
         assert_eq!(left, Span::raw("🙂"));
         assert_eq!(right, Span::raw("!"));
@@ -179,6 +200,82 @@ mod tests {
 
         assert_eq!(wrapped_line[0], "ab👍🏽".chars().collect::<Vec<_>>());
         assert_eq!(wrapped_line[1], "cd".chars().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_wrap_spans_with_grapheme_cluster_wider_than_row() {
+        // given: `a` with four halfwidth voiced sound marks is one cluster of
+        // nine columns
+        let cluster = format!("a{}", "\u{ff9e}".repeat(4));
+
+        // when
+        let wrapped_spans = LineWrapper::wrap_spans(vec![Span::raw(cluster.clone())], 4, 0);
+
+        // then: it gets a row of its own, which ratatui clips
+        assert_eq!(wrapped_spans, vec![vec![Span::raw(cluster.clone())]]);
+
+        // given: a consonant chain joined by viramas is one cluster (GB9c) of
+        // eleven columns
+        let chain = format!("{}\u{915}", "\u{915}\u{94d}".repeat(10));
+
+        // when
+        let wrapped_spans = LineWrapper::wrap_spans(vec![Span::raw(chain.repeat(2))], 8, 0);
+
+        // then
+        assert_eq!(
+            wrapped_spans,
+            vec![vec![Span::raw(chain.clone())], vec![Span::raw(chain)]]
+        );
+
+        // given: the cluster between other text, in spans of its own
+        let spans = vec![Span::raw("x"), Span::raw(cluster.clone()), Span::raw("y")];
+
+        // when
+        let wrapped_spans = LineWrapper::wrap_spans(spans, 4, 0);
+
+        // then: the text of each row (a split can leave an empty span)
+        let rows: Vec<String> = wrapped_spans
+            .iter()
+            .map(|row| row.iter().map(|span| span.content.as_ref()).collect())
+            .collect();
+        assert_eq!(rows, vec!["x".to_string(), cluster, "y".to_string()]);
+    }
+
+    #[test]
+    fn test_wrap_spans_with_char_wider_than_row() {
+        // given: chars of two columns and a tab of four on rows of one and two
+        // columns
+        let wrapped_spans = LineWrapper::wrap_spans(vec![Span::raw("日本")], 1, 0);
+        assert_eq!(
+            wrapped_spans,
+            vec![vec![Span::raw("日")], vec![Span::raw("本")]]
+        );
+
+        let wrapped_spans = LineWrapper::wrap_spans(vec![Span::raw("\ta")], 2, 4);
+        assert_eq!(
+            wrapped_spans,
+            vec![vec![Span::raw("\t")], vec![Span::raw("a")]]
+        );
+    }
+
+    #[test]
+    fn test_wrap_line_with_grapheme_cluster_wider_than_row() {
+        // given: a cluster of nine columns at the start of the line
+        let cluster = format!("a{}", "\u{ff9e}".repeat(4));
+        let line: Vec<char> = format!("{cluster}y").chars().collect();
+
+        // when
+        let wrapped_line = LineWrapper::wrap_line(&line, 4, 0);
+
+        // then: no blank row before it, as in `wrap_spans`
+        assert_eq!(
+            wrapped_line,
+            vec![cluster.chars().collect::<Vec<_>>(), vec!['y']]
+        );
+
+        let line: Vec<char> = "日本".chars().collect();
+        let wrapped_line = LineWrapper::wrap_line(&line, 1, 0);
+        assert_eq!(wrapped_line, vec![vec!['日'], vec!['本']]);
     }
 
     fn test_line_wrapper_determine_split() {
