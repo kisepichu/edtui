@@ -1,6 +1,7 @@
-use crate::helper::{char_width, span_width, split_str_at};
+use crate::helper::{grapheme_width, span_width};
 use ratatui_core::text::Span;
 use std::borrow::Cow;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Default)]
 pub(crate) struct LineWrapper;
@@ -25,22 +26,25 @@ impl LineWrapper {
         split_widths
     }
 
+    /// Wraps a line by grapheme clusters, so that a cluster is never split
+    /// across two rows.
     pub(crate) fn wrap_line(line: &[char], max_width: usize, tab_width: usize) -> Vec<Vec<char>> {
+        let line: String = line.iter().collect();
         let mut lines = Vec::new();
         let mut line_width = 0;
         let mut current_line = Vec::new();
 
-        for &ch in line {
-            let char_width = char_width(ch, tab_width);
+        for grapheme in line.graphemes(true) {
+            let width = grapheme_width(grapheme, tab_width);
 
-            if line_width + char_width > max_width {
+            if line_width + width > max_width {
                 lines.push(current_line.clone());
                 current_line.clear();
                 line_width = 0;
             }
 
-            current_line.push(ch);
-            line_width += char_width;
+            current_line.extend(grapheme.chars());
+            line_width += width;
         }
 
         if !current_line.is_empty() {
@@ -95,12 +99,14 @@ impl LineWrapper {
         wrapped_lines
     }
 
+    /// Splits a string before the first grapheme cluster that does not fit
+    /// into `split_at` columns.
     fn split_str_at(s: Cow<'_, str>, split_at: usize, tab_width: usize) -> (String, String) {
         let mut current_width = 0;
-        for (i, ch) in s.chars().enumerate() {
-            current_width += char_width(ch, tab_width);
+        for (i, grapheme) in s.grapheme_indices(true) {
+            current_width += grapheme_width(grapheme, tab_width);
             if current_width > split_at {
-                let (a, b) = split_str_at(s, i);
+                let (a, b) = s.split_at(i);
                 return (a.to_string(), b.to_string());
             }
         }
@@ -145,6 +151,34 @@ mod tests {
 
         assert_eq!(left, Span::raw("🙂"));
         assert_eq!(right, Span::raw("!"));
+    }
+
+    #[test]
+    fn test_wrap_spans_with_grapheme_clusters() {
+        // 👍🏽 and 👨‍👩‍👧 are one grapheme cluster of two columns each
+        let spans = vec![Span::raw("ab👍🏽cd")];
+        let wrapped_spans = LineWrapper::wrap_spans(spans, 4, 0);
+
+        assert_eq!(wrapped_spans[0], vec![Span::raw("ab👍🏽")]);
+        assert_eq!(wrapped_spans[1], vec![Span::raw("cd")]);
+
+        let spans = vec![Span::raw("ab👨\u{200d}👩\u{200d}👧cd")];
+        let wrapped_spans = LineWrapper::wrap_spans(spans, 4, 0);
+
+        assert_eq!(
+            wrapped_spans[0],
+            vec![Span::raw("ab👨\u{200d}👩\u{200d}👧")]
+        );
+        assert_eq!(wrapped_spans[1], vec![Span::raw("cd")]);
+    }
+
+    #[test]
+    fn test_wrap_line_with_grapheme_clusters() {
+        let line: Vec<char> = "ab👍🏽cd".chars().collect();
+        let wrapped_line = LineWrapper::wrap_line(&line, 4, 0);
+
+        assert_eq!(wrapped_line[0], "ab👍🏽".chars().collect::<Vec<_>>());
+        assert_eq!(wrapped_line[1], "cd".chars().collect::<Vec<_>>());
     }
 
     fn test_line_wrapper_determine_split() {

@@ -205,20 +205,40 @@ pub(crate) fn char_width(ch: char, tab_width: usize) -> usize {
     ch.width().unwrap_or(0)
 }
 
+/// Determines the width of a grapheme cluster as ratatui renders it, with
+/// ratatui's [`CellWidth`](ratatui_core::buffer::CellWidth). A tab takes
+/// `tab_width` columns; a cluster with a control character is not rendered
+/// and takes none.
+pub(crate) fn grapheme_width(grapheme: &str, tab_width: usize) -> usize {
+    use ratatui_core::buffer::CellWidth;
+    if grapheme == "\t" {
+        return tab_width;
+    }
+    if grapheme.contains(char::is_control) {
+        return 0;
+    }
+    usize::from(grapheme.cell_width())
+}
+
+/// Determines the unicode width of a string, summed over its grapheme
+/// clusters, as ratatui renders it. Emoji sequences (skin tones, zero width
+/// joiners, variation selectors) are wider or narrower than the sum of
+/// their chars.
+pub(crate) fn str_width(s: &str, tab_width: usize) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    s.graphemes(true)
+        .map(|grapheme| grapheme_width(grapheme, tab_width))
+        .sum()
+}
+
 /// Determines the unicode width of chars.
 pub(crate) fn chars_width(chars: &[char], tab_width: usize) -> usize {
-    chars
-        .iter()
-        .fold(0, |sum, ch| sum + char_width(*ch, tab_width))
+    str_width(&chars.iter().collect::<String>(), tab_width)
 }
 
 /// Determines the unicode width of a span.
 pub(crate) fn span_width(s: &Span, tab_width: usize) -> usize {
-    use unicode_width::UnicodeWidthStr;
-    s.content
-        .as_ref()
-        .replace('\t', &" ".repeat(tab_width))
-        .width()
+    str_width(&s.content, tab_width)
 }
 
 /// Splits span into two at an index. Other than [`str::split_at`], this method

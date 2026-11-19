@@ -430,6 +430,7 @@ dependencies = [
  "ratatui-core",
  "ratatui-widgets",
  "syntect",
+ "unicode-segmentation",
  "unicode-width",
 ]
 
