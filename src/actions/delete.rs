@@ -359,14 +359,13 @@ fn delete_word_backward(state: &mut EditorState) {
     let start_class = CharacterClass::from(state.lines.get(start));
 
     for (ch, idx) in state.lines.iter().from(start).rev() {
-        if idx.col == 0 {
-            start = idx;
-            break;
-        }
         if CharacterClass::from(ch) != start_class {
             break;
         }
         start = idx;
+        if idx.col == 0 {
+            break;
+        }
     }
 
     delete_range(&mut state.lines, start, end, &mut state.clip);
@@ -948,5 +947,21 @@ mod tests {
         DeleteWordBackward(1).execute(&mut state);
         assert_eq!(state.lines.to_string(), "日本語の");
         assert_eq!(state.cursor, Index2::new(0, 4));
+    }
+
+    #[test]
+    fn test_delete_word_backward_to_word_at_second_column() {
+        // Vim: insert mode `<C-w>` at the end keeps column 0 when it has
+        // another class: `「日本` keeps `「`, `a日本` keeps `a`, `(abc`
+        // keeps `(`.
+        for (line, rest) in [("「日本", "「"), ("a日本", "a"), ("(abc", "(")] {
+            let mut state = EditorState::new(Lines::from(line));
+            state.mode = EditorMode::Insert;
+            state.cursor = Index2::new(0, line.chars().count());
+
+            DeleteWordBackward(1).execute(&mut state);
+            assert_eq!(state.lines.to_string(), rest, "{line}");
+            assert_eq!(state.cursor, Index2::new(0, 1), "{line}");
+        }
     }
 }

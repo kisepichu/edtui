@@ -227,16 +227,15 @@ fn move_word_backward(state: &mut EditorState) {
     let start_char_class = CharacterClass::from(state.lines.get(start_index));
 
     for (next_char, i) in state.lines.iter().from(start_index).rev() {
-        // Break loop if it reaches the start of the line
-        if i.col == 0 {
-            start_index = i;
-            break;
-        }
         // Break loop if characters don't belong to the same class
         if CharacterClass::from(next_char) != start_char_class {
             break;
         }
         start_index = i;
+        // Break loop if it reaches the start of the line
+        if i.col == 0 {
+            break;
+        }
     }
 
     state.cursor = start_index;
@@ -570,11 +569,17 @@ impl CharacterClass {
     /// Vim's `src/mbyte.c`): sorted, non-overlapping ranges. Characters
     /// outside them are word characters.
     ///
-    /// Rows marked `*` are not in Vim's table. Vim treats variation
-    /// selectors and tags as part of the character before them (an emoji
-    /// or symbol, or an ideograph for the ideographic selectors), and gives
-    /// emoji a class of their own, where they are symbols here.
-    const CLASSES: [(char, char, Self); 75] = [
+    /// Rows marked `*` are not in Vim's table:
+    /// - Vim gives emoji a class of their own; here they are symbols. The
+    ///   `*` symbol rows cover the emoji outside Vim's symbol ranges (whole
+    ///   symbol blocks, or single code points).
+    /// - Vim treats variation selectors as composing characters, part of the
+    ///   character before them. Motions here move by char, so the selectors
+    ///   are symbols, which keeps a word together after emoji and symbols,
+    ///   and the ideographic selectors are ideographs.
+    /// - Vim gives tags the word class; here they are symbols, like the flag
+    ///   emoji of a tag sequence.
+    const CLASSES: [(char, char, Self); 78] = [
         ('\u{037e}', '\u{037e}', Self::Punctuation), // Greek question mark
         ('\u{0387}', '\u{0387}', Self::Punctuation), // Greek ano teleia
         ('\u{055a}', '\u{055f}', Self::Punctuation), // Armenian punctuation
@@ -622,6 +627,7 @@ impl CharacterClass {
         ('\u{2900}', '\u{2998}', Self::Punctuation), // arrows, brackets, etc.
         ('\u{29d8}', '\u{29db}', Self::Punctuation),
         ('\u{29fc}', '\u{29fd}', Self::Punctuation),
+        ('\u{2b00}', '\u{2bff}', Self::Punctuation), // * misc. symbols and arrows
         ('\u{2e00}', '\u{2e7f}', Self::Punctuation), // supplemental punctuation
         ('\u{3000}', '\u{3000}', Self::Whitespace),  // ideographic space
         ('\u{3001}', '\u{3020}', Self::Punctuation), // ideographic punctuation
@@ -629,6 +635,8 @@ impl CharacterClass {
         ('\u{303d}', '\u{303d}', Self::Punctuation),
         ('\u{3040}', '\u{309f}', Self::Hiragana),
         ('\u{30a0}', '\u{30ff}', Self::Katakana),
+        ('\u{3297}', '\u{3297}', Self::Punctuation), // * circled ideograph congratulation
+        ('\u{3299}', '\u{3299}', Self::Punctuation), // * circled ideograph secret
         ('\u{3300}', '\u{9fff}', Self::CjkIdeograph),
         ('\u{ac00}', '\u{d7a3}', Self::Hangul),
         ('\u{f900}', '\u{faff}', Self::CjkIdeograph),
@@ -1048,6 +1056,20 @@ mod tests {
     }
 
     #[test]
+    fn test_move_word_backward_to_word_at_second_column() {
+        // Vim: `b` stops at the start of a word at column 1 when column 0
+        // has another class: from `c` of `(abc` at `a`, from `」` of
+        // `「日本」` at `日`, from `本` of `a日本` at `日`.
+        for (line, col) in [("(abc", 3), ("「日本」", 3), ("a日本", 2)] {
+            let mut state = EditorState::new(Lines::from(line));
+            state.cursor = Index2::new(0, col);
+
+            MoveWordBackward(1).execute(&mut state);
+            assert_eq!(state.cursor, Index2::new(0, 1), "{line}");
+        }
+    }
+
+    #[test]
     fn test_move_word_forward_full_width_punctuation_and_ideographic_space() {
         // Vim: `、` and `。` are punctuation, and the ideographic space is
         // skipped like a space, so `w` stops at `、`, `了`, `で`, `。` and `o`.
@@ -1082,6 +1104,21 @@ mod tests {
         for col in [2, 5, 8] {
             MoveWordForward(1).execute(&mut state);
             assert_eq!(state.cursor, Index2::new(0, col));
+        }
+    }
+
+    #[test]
+    fn test_move_word_forward_emoji_outside_symbol_blocks() {
+        // Vim: `⭐` (Miscellaneous Symbols and Arrows) and `㊙` (Enclosed CJK
+        // Letters) are emoji, not word characters, so `w` from `o` stops at
+        // the emoji, then at `x`.
+        for line in ["ok⭐ x", "ok㊙ x"] {
+            let mut state = EditorState::new(Lines::from(line));
+
+            for col in [2, 4] {
+                MoveWordForward(1).execute(&mut state);
+                assert_eq!(state.cursor, Index2::new(0, col), "{line}");
+            }
         }
     }
 
