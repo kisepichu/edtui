@@ -1,7 +1,7 @@
 use jagged::index::RowIndex;
 use ratatui_core::{layout::Rect, text::Span};
 
-use crate::{EditorMode, EditorState, Index2, Lines};
+use crate::{actions::motion::CharacterClass, EditorMode, EditorState, Index2, Lines};
 
 /// Inserts a character into the lines data at the given `index`.
 pub(crate) fn insert_char(lines: &mut Lines, index: &mut Index2, ch: char, skip_move: bool) {
@@ -102,10 +102,12 @@ pub(crate) fn max_row(state: &EditorState) -> usize {
 }
 
 /// Skip whitespaces moving to the right. Stop at the end of the line.
+/// Whitespace is the class of word motions, which includes the no-break
+/// and ideographic spaces.
 pub(crate) fn skip_whitespace(lines: &Lines, index: &mut Index2) {
     if let Some(line) = lines.get(RowIndex::new(index.row)) {
-        for (i, &ch) in line.iter().enumerate().skip(index.col) {
-            if !ch.is_ascii_whitespace() {
+        for (i, ch) in line.iter().enumerate().skip(index.col) {
+            if CharacterClass::from(ch) != CharacterClass::Whitespace {
                 index.col = i;
                 break;
             }
@@ -124,11 +126,12 @@ pub(crate) fn skip_empty_lines(lines: &Lines, row_index: &mut usize) {
 }
 
 /// Skip whitespaces moving to the left. Stop at the start of the line.
+/// Whitespace is the class of word motions, as in [`skip_whitespace`].
 pub(crate) fn skip_whitespace_rev(lines: &Lines, index: &mut Index2) {
     if let Some(line) = lines.get(RowIndex::new(index.row)) {
         let skip = line.len().saturating_sub(index.col + 1);
-        for &ch in line.iter().rev().skip(skip) {
-            if !ch.is_ascii_whitespace() {
+        for ch in line.iter().rev().skip(skip) {
+            if CharacterClass::from(ch) != CharacterClass::Whitespace {
                 break;
             }
             index.col = index.col.saturating_sub(1);
@@ -205,20 +208,40 @@ pub(crate) fn char_width(ch: char, tab_width: usize) -> usize {
     ch.width().unwrap_or(0)
 }
 
+/// Determines the width of a grapheme cluster as ratatui renders it, with
+/// ratatui's [`CellWidth`](ratatui_core::buffer::CellWidth). A tab takes
+/// `tab_width` columns; a cluster with a control character is not rendered
+/// and takes none.
+pub(crate) fn grapheme_width(grapheme: &str, tab_width: usize) -> usize {
+    use ratatui_core::buffer::CellWidth;
+    if grapheme == "\t" {
+        return tab_width;
+    }
+    if grapheme.contains(char::is_control) {
+        return 0;
+    }
+    usize::from(grapheme.cell_width())
+}
+
+/// Determines the unicode width of a string, summed over its grapheme
+/// clusters, as ratatui renders it. Emoji sequences (skin tones, zero width
+/// joiners, variation selectors) are wider or narrower than the sum of
+/// their chars.
+pub(crate) fn str_width(s: &str, tab_width: usize) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    s.graphemes(true)
+        .map(|grapheme| grapheme_width(grapheme, tab_width))
+        .sum()
+}
+
 /// Determines the unicode width of chars.
 pub(crate) fn chars_width(chars: &[char], tab_width: usize) -> usize {
-    chars
-        .iter()
-        .fold(0, |sum, ch| sum + char_width(*ch, tab_width))
+    str_width(&chars.iter().collect::<String>(), tab_width)
 }
 
 /// Determines the unicode width of a span.
 pub(crate) fn span_width(s: &Span, tab_width: usize) -> usize {
-    use unicode_width::UnicodeWidthStr;
-    s.content
-        .as_ref()
-        .replace('\t', &" ".repeat(tab_width))
-        .width()
+    str_width(&s.content, tab_width)
 }
 
 /// Splits span into two at an index. Other than [`str::split_at`], this method

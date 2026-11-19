@@ -1206,8 +1206,10 @@ mod tests {
     fn test_insert_hello_world() {
         use crate::EditorState;
 
-        let mut state = EditorState::default();
-        state.mode = EditorMode::Insert;
+        let mut state = EditorState {
+            mode: EditorMode::Insert,
+            ..Default::default()
+        };
 
         let mut handler = KeyEventHandler::default();
 
@@ -1596,8 +1598,10 @@ mod tests {
         use crate::EditorState;
         use crossterm::event::{KeyEvent as CTKeyEvent, KeyModifiers as CTMods};
 
-        let mut state = EditorState::default();
-        state.mode = EditorMode::Insert;
+        let mut state = EditorState {
+            mode: EditorMode::Insert,
+            ..Default::default()
+        };
 
         let mut handler = KeyEventHandler::emacs_mode();
 

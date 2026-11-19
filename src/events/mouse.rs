@@ -1,9 +1,10 @@
 use crossterm::event::{MouseEvent as CTMouseEvent, MouseEventKind};
 use jagged::Index2;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     actions::{Execute, SwitchMode},
-    helper::char_width,
+    helper::grapheme_width,
     state::selection::set_selection,
     view::line_wrapper::LineWrapper,
     EditorMode, EditorState,
@@ -198,15 +199,18 @@ fn find_cursor_column_in_wrapped_line(
     let mut current_width = 0;
     let mut col_index = 0;
 
-    for &ch in l {
-        let char_width = char_width(ch, tab_width);
+    // The wrapped rows break between grapheme clusters, so a row can be
+    // segmented on its own.
+    let l: String = l.iter().collect();
+    for grapheme in l.graphemes(true) {
+        let width = grapheme_width(grapheme, tab_width);
 
-        if current_width + char_width > mouse.col {
+        if current_width + width > mouse.col {
             break;
         }
 
-        current_width += char_width;
-        col_index += 1;
+        current_width += width;
+        col_index += grapheme.chars().count();
     }
 
     col_offset + col_index

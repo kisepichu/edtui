@@ -299,6 +299,57 @@ mod tests {
     }
 
     #[test]
+    fn test_cursor_screen_position_after_grapheme_clusters() {
+        // Each emoji is one grapheme cluster of two columns, made of 2 (skin
+        // tone), 5 (zero width joiners) and 2 (variation selector) chars.
+        let mut state = EditorState::new(Lines::from("a👍🏽b👨\u{200d}👩\u{200d}👧c❤\u{fe0f}d"));
+        let area = Rect::new(0, 0, 20, 5);
+
+        // (column of the char, its cell, the char): b, c and d
+        for (col, x, symbol) in [(3, 3, "b"), (9, 6, "c"), (12, 9, "d")] {
+            state.cursor = Index2::new(0, col);
+            let mut buffer = Buffer::empty(area);
+            EditorView::new(&mut state).render(area, &mut buffer);
+
+            let pos = state.cursor_screen_position().unwrap();
+            assert_eq!(pos.x, x, "cursor at column {col}");
+            assert_eq!(buffer[pos].symbol(), symbol);
+        }
+    }
+
+    #[test]
+    fn test_cursor_screen_position_after_halfwidth_sound_mark() {
+        // ratatui gives the halfwidth voiced sound mark of ｶﾞ a cell of its
+        // own; the cursor on `x` is on the cell where `x` is rendered.
+        let mut state = EditorState::new(Lines::from("\u{ff76}\u{ff9e}x"));
+        state.cursor = Index2::new(0, 2);
+
+        let area = Rect::new(0, 0, 20, 5);
+        let mut buffer = Buffer::empty(area);
+        EditorView::new(&mut state).render(area, &mut buffer);
+
+        let pos = state.cursor_screen_position().unwrap();
+        assert_eq!(buffer[pos].symbol(), "x");
+    }
+
+    #[test]
+    fn test_cursor_screen_position_wrapped_after_grapheme_cluster() {
+        // 👍🏽 fills the first row of four columns, so `c` starts the second.
+        let mut state = EditorState::new(Lines::from("ab👍🏽cd"));
+        state.cursor = Index2::new(0, 4);
+
+        let area = Rect::new(0, 0, 4, 5);
+        let mut buffer = Buffer::empty(area);
+        EditorView::new(&mut state)
+            .wrap(true)
+            .render(area, &mut buffer);
+
+        let pos = state.cursor_screen_position().unwrap();
+        assert_eq!(pos.x, 0);
+        assert_eq!(pos.y, 1);
+    }
+
+    #[test]
     fn test_single_line_mode_blocks_line_break() {
         use crate::actions::LineBreak;
 

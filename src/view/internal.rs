@@ -4,12 +4,13 @@
 #[cfg(feature = "syntax-highlighting")]
 use crate::SyntaxHighlighter;
 use crate::{
-    helper::{char_width, span_width, split_str_at},
+    helper::{grapheme_width, span_width, split_str_at},
     state::highlight::Highlight,
     state::selection::Selection,
 };
 use jagged::Index2;
 use ratatui_core::{style::Style, text::Span};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// An internal data type that represent a styled span.
 /// Unlike [`ratatui_core::text::Span`] it holds an owned string simplifying lifetime management.
@@ -321,18 +322,20 @@ pub(super) fn find_position_in_wrapped_spans(
 }
 
 /// Returns the position of a char in a string taking into
-/// account unicode width.
+/// account unicode width. Widths are counted per grapheme cluster, as
+/// ratatui renders spans, and a char inside a cluster is placed on the
+/// cluster's first cell.
 pub(super) fn unicode_width_position_in_spans(spans: &[Span], n: usize, tab_width: usize) -> usize {
     let mut total_width = 0;
     let mut chars_counted = 0;
 
     for span in spans {
-        for ch in span.content.chars() {
-            if chars_counted >= n {
+        for grapheme in span.content.graphemes(true) {
+            chars_counted += grapheme.chars().count();
+            if chars_counted > n {
                 return total_width;
             }
-            total_width += char_width(ch, tab_width);
-            chars_counted += 1;
+            total_width += grapheme_width(grapheme, tab_width);
         }
     }
 
@@ -369,7 +372,7 @@ mod tests {
         // given a highlighted line
         let base = Style::default();
         let hightlighted = Style::default().red();
-        let line = "Hello".chars().into_iter().collect::<Vec<char>>();
+        let line = "Hello".chars().collect::<Vec<char>>();
 
         let selection = Some(Selection::new(Index2::new(0, 0), Index2::new(0, 2)));
         let selections = vec![&selection];
@@ -394,7 +397,7 @@ mod tests {
         ];
 
         // when `split_spans` is called
-        let new_spans = InternalSpan::split_spans(&spans, 1, 1, &hightlighted);
+        let new_spans = InternalSpan::split_spans(&spans, 1, 1, hightlighted);
 
         // then the span is split correctly
         assert_eq!(new_spans[0], InternalSpan::new("H", base));
@@ -403,7 +406,7 @@ mod tests {
         assert_eq!(new_spans[3], InternalSpan::new("lo!", base));
 
         // when
-        let new_spans = InternalSpan::split_spans(&spans, 1, 2, &hightlighted);
+        let new_spans = InternalSpan::split_spans(&spans, 1, 2, hightlighted);
 
         // then
         assert_eq!(new_spans[0], InternalSpan::new("H", base));
@@ -411,7 +414,7 @@ mod tests {
         assert_eq!(new_spans[2], InternalSpan::new("lo!", base));
 
         // when
-        let new_spans = InternalSpan::split_spans(&spans, 1, 3, &hightlighted);
+        let new_spans = InternalSpan::split_spans(&spans, 1, 3, hightlighted);
 
         // then
         assert_eq!(new_spans[0], InternalSpan::new("H", base));
@@ -420,7 +423,7 @@ mod tests {
         assert_eq!(new_spans[3], InternalSpan::new("o!", base));
 
         // when
-        let new_spans = InternalSpan::split_spans(&spans, 1, 10, &hightlighted);
+        let new_spans = InternalSpan::split_spans(&spans, 1, 10, hightlighted);
 
         // then
         assert_eq!(new_spans[0], InternalSpan::new("H", base));
@@ -436,7 +439,7 @@ mod tests {
         let spans = vec![InternalSpan::new("Hell🙂!", base)];
 
         // when `split_spans` is called
-        let new_spans = InternalSpan::split_spans(&spans, 2, 4, &hightlighted);
+        let new_spans = InternalSpan::split_spans(&spans, 2, 4, hightlighted);
 
         // then the span is split correctly
         assert_eq!(new_spans[0], InternalSpan::new("He", base));
@@ -494,7 +497,7 @@ mod tests {
         // when `split_at_selection` is called
         let selection = Selection::new(Index2::new(0, 1), Index2::new(0, 3));
         let new_spans =
-            InternalSpan::split_at_selection(&spans, 0, &selection, &hightlighted).unwrap();
+            InternalSpan::split_at_selection(&spans, 0, &selection, hightlighted).unwrap();
 
         // then spans are correctly split
         assert_eq!(new_spans[0], InternalSpan::new("H", base));
@@ -516,7 +519,7 @@ mod tests {
         // when `split_at_selection` is called
         let selection = Selection::new(Index2::new(0, 3), Index2::new(0, 5));
         let new_spans =
-            InternalSpan::split_at_selection(&spans, 0, &selection, &hightlighted).unwrap();
+            InternalSpan::split_at_selection(&spans, 0, &selection, hightlighted).unwrap();
 
         // then spans are correctly split
         assert_eq!(new_spans[0], InternalSpan::new("Hel", base));
@@ -536,6 +539,25 @@ mod tests {
 
         let index = unicode_width_position_in_spans(&spans, 99, 0);
         assert_eq!(index, 8);
+    }
+
+    #[test]
+    fn test_unicode_width_position_in_spans_with_grapheme_clusters() {
+        // given a line where each emoji is one grapheme cluster of two columns,
+        // made of 2 (skin tone), 5 (zero width joiners) and 2 (variation
+        // selector) chars: a 👍🏽 b 👨‍👩‍👧 c ❤️ d
+        let spans = vec![Span::from("a👍🏽b👨\u{200d}👩\u{200d}👧c❤\u{fe0f}d")];
+
+        // then the char after each cluster is two columns further
+        assert_eq!(unicode_width_position_in_spans(&spans, 3, 0), 3);
+        assert_eq!(unicode_width_position_in_spans(&spans, 9, 0), 6);
+        assert_eq!(unicode_width_position_in_spans(&spans, 12, 0), 9);
+        assert_eq!(unicode_width_position_in_spans(&spans, 13, 0), 10);
+
+        // and a char inside a cluster is placed on the cluster's cell
+        assert_eq!(unicode_width_position_in_spans(&spans, 2, 0), 1);
+        assert_eq!(unicode_width_position_in_spans(&spans, 6, 0), 4);
+        assert_eq!(unicode_width_position_in_spans(&spans, 11, 0), 7);
     }
 
     #[test]
