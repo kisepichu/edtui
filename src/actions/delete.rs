@@ -916,4 +916,37 @@ mod tests {
         assert_eq!(state.lines.to_string(), "World");
         assert_eq!(state.cursor, Index2::new(0, 0));
     }
+
+    #[test]
+    fn test_delete_word_forward_japanese() {
+        // Vim: `dw` on `日` deletes `日本語`, then on `の` deletes `の`.
+        let mut state = EditorState::new(Lines::from("日本語のテキスト"));
+
+        DeleteWordForward(1).execute(&mut state);
+        assert_eq!(state.lines.to_string(), "のテキスト");
+
+        DeleteWordForward(1).execute(&mut state);
+        assert_eq!(state.lines.to_string(), "テキスト");
+    }
+
+    #[test]
+    fn test_delete_word_forward_deletes_ideographic_space() {
+        // Vim: `dw` deletes the word and the ideographic space after it.
+        let mut state = EditorState::new(Lines::from("日本\u{3000}語"));
+
+        DeleteWordForward(1).execute(&mut state);
+        assert_eq!(state.lines.to_string(), "語");
+    }
+
+    #[test]
+    fn test_delete_word_backward_japanese() {
+        // Vim: insert mode `<C-w>` at the end deletes `テキスト`.
+        let mut state = EditorState::new(Lines::from("日本語のテキスト"));
+        state.mode = EditorMode::Insert;
+        state.cursor = Index2::new(0, 8);
+
+        DeleteWordBackward(1).execute(&mut state);
+        assert_eq!(state.lines.to_string(), "日本語の");
+        assert_eq!(state.cursor, Index2::new(0, 4));
+    }
 }

@@ -516,6 +516,18 @@ mod tests {
     }
 
     #[test]
+    fn test_select_inner_word_japanese() {
+        // Vim: `viw` on the `キ` of `日本語のテキスト` selects `テキスト`.
+        let mut state = EditorState::new(Lines::from("日本語のテキスト"));
+        state.cursor = Index2::new(0, 5);
+
+        SelectInnerWord.execute(&mut state);
+
+        let want = Selection::new(Index2::new(0, 4), Index2::new(0, 7));
+        assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
     fn test_delete_inner_word_stays_normal_mode() {
         let mut state = EditorState::new(Lines::from("Hello World"));
         state.cursor = Index2::new(0, 1);

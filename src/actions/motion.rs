@@ -1,10 +1,10 @@
-use std::cmp::min;
+use std::cmp::{min, Ordering};
 
 use crate::{
     helper::{find_matching_bracket, skip_empty_lines},
     state::selection::set_selection_with_lines,
 };
-use jagged::Index2;
+use jagged::{index::RowIndex, Index2};
 
 use super::Execute;
 use crate::{
@@ -261,8 +261,13 @@ pub struct MoveToFirst();
 
 impl Execute for MoveToFirst {
     fn execute(&mut self, state: &mut EditorState) {
-        state.cursor.col = 0;
-        skip_whitespace(&state.lines, &mut state.cursor);
+        // Like Vim's `^`, only ASCII whitespace is skipped, not the other
+        // blanks of word motions, such as the ideographic space.
+        state.cursor.col = state
+            .lines
+            .get(RowIndex::new(state.cursor.row))
+            .and_then(|line| line.iter().position(|ch| !ch.is_ascii_whitespace()))
+            .unwrap_or(0);
 
         if state.mode == EditorMode::Visual {
             set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
@@ -533,27 +538,146 @@ pub(crate) fn find_char_forward(state: &EditorState, target: char) -> Option<usi
     None
 }
 
-#[derive(Debug, Clone, Eq)]
+/// The class of a character for word motions and operators (`w`, `e`, `b`,
+/// `dw`, `cw`, `iw`, ...): a word is a run of characters of one class.
+///
+/// The classes follow Vim's `utf_class()` (`src/mbyte.c`), so that, as in
+/// Vim, `日本語のテキスト` is made of the words `日本語`, `の` and `テキスト`.
+#[derive(Debug, Clone, Copy, Eq)]
 pub(crate) enum CharacterClass {
+    /// No character, as on an empty line. Not equal to any class, itself
+    /// included.
     Unknown,
+    /// ASCII letters and digits, `_`, Latin-1 letters, and the letters of
+    /// scripts without a class of their own (Greek, Cyrillic, ...).
     Alphanumeric,
+    /// Punctuation and symbols, ASCII, full-width and ideographic alike.
+    /// Emoji count as symbols.
     Punctuation,
+    /// Spaces, including the no-break and ideographic spaces.
     Whitespace,
+    Superscript,
+    Subscript,
+    Braille,
+    Hiragana,
+    Katakana,
+    CjkIdeograph,
+    Hangul,
+}
+
+impl CharacterClass {
+    /// Vim's classes of the characters above Latin-1 (`utf_class_buf()` in
+    /// Vim's `src/mbyte.c`): sorted, non-overlapping ranges. Characters
+    /// outside them are word characters.
+    ///
+    /// Rows marked `*` are not in Vim's table. Vim treats variation
+    /// selectors and tags as part of the character before them (an emoji
+    /// or symbol, or an ideograph for the ideographic selectors), and gives
+    /// emoji a class of their own, where they are symbols here.
+    const CLASSES: [(char, char, Self); 75] = [
+        ('\u{037e}', '\u{037e}', Self::Punctuation), // Greek question mark
+        ('\u{0387}', '\u{0387}', Self::Punctuation), // Greek ano teleia
+        ('\u{055a}', '\u{055f}', Self::Punctuation), // Armenian punctuation
+        ('\u{0589}', '\u{0589}', Self::Punctuation), // Armenian full stop
+        ('\u{05be}', '\u{05be}', Self::Punctuation),
+        ('\u{05c0}', '\u{05c0}', Self::Punctuation),
+        ('\u{05c3}', '\u{05c3}', Self::Punctuation),
+        ('\u{05f3}', '\u{05f4}', Self::Punctuation),
+        ('\u{060c}', '\u{060c}', Self::Punctuation),
+        ('\u{061b}', '\u{061b}', Self::Punctuation),
+        ('\u{061f}', '\u{061f}', Self::Punctuation),
+        ('\u{066a}', '\u{066d}', Self::Punctuation),
+        ('\u{06d4}', '\u{06d4}', Self::Punctuation),
+        ('\u{0700}', '\u{070d}', Self::Punctuation), // Syriac punctuation
+        ('\u{0964}', '\u{0965}', Self::Punctuation),
+        ('\u{0970}', '\u{0970}', Self::Punctuation),
+        ('\u{0df4}', '\u{0df4}', Self::Punctuation),
+        ('\u{0e4f}', '\u{0e4f}', Self::Punctuation),
+        ('\u{0e5a}', '\u{0e5b}', Self::Punctuation),
+        ('\u{0f04}', '\u{0f12}', Self::Punctuation),
+        ('\u{0f3a}', '\u{0f3d}', Self::Punctuation),
+        ('\u{0f85}', '\u{0f85}', Self::Punctuation),
+        ('\u{104a}', '\u{104f}', Self::Punctuation), // Myanmar punctuation
+        ('\u{10fb}', '\u{10fb}', Self::Punctuation), // Georgian punctuation
+        ('\u{1361}', '\u{1368}', Self::Punctuation), // Ethiopic punctuation
+        ('\u{166d}', '\u{166e}', Self::Punctuation), // Canadian Syl. punctuation
+        ('\u{1680}', '\u{1680}', Self::Whitespace),
+        ('\u{169b}', '\u{169c}', Self::Punctuation),
+        ('\u{16eb}', '\u{16ed}', Self::Punctuation),
+        ('\u{1735}', '\u{1736}', Self::Punctuation),
+        ('\u{17d4}', '\u{17dc}', Self::Punctuation), // Khmer punctuation
+        ('\u{1800}', '\u{180a}', Self::Punctuation), // Mongolian punctuation
+        ('\u{2000}', '\u{200b}', Self::Whitespace),  // spaces
+        ('\u{200c}', '\u{2027}', Self::Punctuation), // punctuation and symbols
+        ('\u{2028}', '\u{2029}', Self::Whitespace),
+        ('\u{202a}', '\u{202e}', Self::Punctuation), // punctuation and symbols
+        ('\u{202f}', '\u{202f}', Self::Whitespace),
+        ('\u{2030}', '\u{205e}', Self::Punctuation), // punctuation and symbols
+        ('\u{205f}', '\u{205f}', Self::Whitespace),
+        ('\u{2060}', '\u{206f}', Self::Punctuation), // punctuation and symbols
+        ('\u{2070}', '\u{207f}', Self::Superscript),
+        ('\u{2080}', '\u{2094}', Self::Subscript),
+        ('\u{20a0}', '\u{27ff}', Self::Punctuation), // all kinds of symbols
+        ('\u{2800}', '\u{28ff}', Self::Braille),
+        ('\u{2900}', '\u{2998}', Self::Punctuation), // arrows, brackets, etc.
+        ('\u{29d8}', '\u{29db}', Self::Punctuation),
+        ('\u{29fc}', '\u{29fd}', Self::Punctuation),
+        ('\u{2e00}', '\u{2e7f}', Self::Punctuation), // supplemental punctuation
+        ('\u{3000}', '\u{3000}', Self::Whitespace),  // ideographic space
+        ('\u{3001}', '\u{3020}', Self::Punctuation), // ideographic punctuation
+        ('\u{3030}', '\u{3030}', Self::Punctuation),
+        ('\u{303d}', '\u{303d}', Self::Punctuation),
+        ('\u{3040}', '\u{309f}', Self::Hiragana),
+        ('\u{30a0}', '\u{30ff}', Self::Katakana),
+        ('\u{3300}', '\u{9fff}', Self::CjkIdeograph),
+        ('\u{ac00}', '\u{d7a3}', Self::Hangul),
+        ('\u{f900}', '\u{faff}', Self::CjkIdeograph),
+        ('\u{fd3e}', '\u{fd3f}', Self::Punctuation),
+        ('\u{fe00}', '\u{fe0f}', Self::Punctuation), // * variation selectors
+        ('\u{fe30}', '\u{fe6b}', Self::Punctuation), // punctuation forms
+        ('\u{ff00}', '\u{ff0f}', Self::Punctuation), // half/fullwidth ASCII
+        ('\u{ff1a}', '\u{ff20}', Self::Punctuation), // half/fullwidth ASCII
+        ('\u{ff3b}', '\u{ff40}', Self::Punctuation), // half/fullwidth ASCII
+        ('\u{ff5b}', '\u{ff65}', Self::Punctuation), // half/fullwidth ASCII
+        ('\u{1d000}', '\u{1d24f}', Self::Punctuation), // musical notation
+        ('\u{1d400}', '\u{1d7ff}', Self::Punctuation), // mathematical alphanumeric symbols
+        ('\u{1f000}', '\u{1f2ff}', Self::Punctuation), // game pieces; enclosed characters
+        ('\u{1f300}', '\u{1f9ff}', Self::Punctuation), // many symbol blocks
+        ('\u{1fa70}', '\u{1faff}', Self::Punctuation), // * symbols and pictographs ext. A
+        ('\u{20000}', '\u{2a6df}', Self::CjkIdeograph),
+        ('\u{2a700}', '\u{2b73f}', Self::CjkIdeograph),
+        ('\u{2b740}', '\u{2b81f}', Self::CjkIdeograph),
+        ('\u{2f800}', '\u{2fa1f}', Self::CjkIdeograph),
+        ('\u{e0020}', '\u{e007f}', Self::Punctuation), // * tags
+        ('\u{e0100}', '\u{e01ef}', Self::CjkIdeograph), // * ideographic variation selectors
+    ];
 }
 
 impl From<&char> for CharacterClass {
     fn from(value: &char) -> Self {
-        // Underscore counts as a word character (matching Vim's `iskeyword`),
-        if value.is_ascii_alphanumeric() || *value == '_' {
-            return Self::Alphanumeric;
-        }
-        if value.is_ascii_punctuation() {
+        let ch = *value;
+        if u32::from(ch) < 0x100 {
+            if ch.is_ascii_whitespace() || ch == '\u{a0}' {
+                return Self::Whitespace;
+            }
+            // Underscore and the Latin-1 letters count as word characters
+            // (matching Vim's default `iskeyword`, `@,48-57,_,192-255`).
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch >= '\u{c0}' {
+                return Self::Alphanumeric;
+            }
             return Self::Punctuation;
         }
-        if value.is_ascii_whitespace() {
-            return Self::Whitespace;
-        }
-        Self::Unknown
+        Self::CLASSES
+            .binary_search_by(|&(first, last, _)| {
+                if last < ch {
+                    Ordering::Less
+                } else if first > ch {
+                    Ordering::Greater
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .map_or(Self::Alphanumeric, |i| Self::CLASSES[i].2)
     }
 }
 
@@ -880,6 +1004,99 @@ mod tests {
     }
 
     #[test]
+    fn test_move_word_forward_japanese() {
+        // Vim: CJK ideographs, hiragana and katakana are separate classes
+        // (`utf_class()`), so `w` from `日` stops at `の`, then at `テ`.
+        let mut state = EditorState::new(Lines::from("日本語のテキスト"));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 3));
+
+        MoveWordForward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 4));
+    }
+
+    #[test]
+    fn test_move_word_forward_to_end_of_word_japanese() {
+        // Vim: `e` from `日` stops at `語`, `の` and `ト`.
+        let mut state = EditorState::new(Lines::from("日本語のテキスト"));
+
+        MoveWordForwardToEndOfWord(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 2));
+
+        MoveWordForwardToEndOfWord(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 3));
+
+        MoveWordForwardToEndOfWord(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 7));
+    }
+
+    #[test]
+    fn test_move_word_backward_japanese() {
+        // Vim: `b` from `ト` stops at `テ`, `の` and `日`.
+        let mut state = EditorState::new(Lines::from("日本語のテキスト"));
+        state.cursor = Index2::new(0, 7);
+
+        MoveWordBackward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 4));
+
+        MoveWordBackward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 3));
+
+        MoveWordBackward(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 0));
+    }
+
+    #[test]
+    fn test_move_word_forward_full_width_punctuation_and_ideographic_space() {
+        // Vim: `、` and `。` are punctuation, and the ideographic space is
+        // skipped like a space, so `w` stops at `、`, `了`, `で`, `。` and `o`.
+        let mut state = EditorState::new(Lines::from("はい、了解です。\u{3000}ok"));
+
+        for col in [2, 3, 5, 7, 9] {
+            MoveWordForward(1).execute(&mut state);
+            assert_eq!(state.cursor, Index2::new(0, col));
+        }
+    }
+
+    #[test]
+    fn test_move_word_forward_other_scripts() {
+        // Vim: Latin-1 and Cyrillic letters are word characters like ASCII
+        // letters, and Hangul is a class of its own, so `w` stops at `П`,
+        // `м`, `한` and `a`.
+        let mut state = EditorState::new(Lines::from("naïve Привет мир 한국어abc"));
+
+        for col in [6, 13, 17, 20] {
+            MoveWordForward(1).execute(&mut state);
+            assert_eq!(state.cursor, Index2::new(0, col));
+        }
+    }
+
+    #[test]
+    fn test_move_word_forward_emoji() {
+        // A skin tone modifier and a variation selector do not end a word
+        // (in Vim the selector is part of the emoji's cell), so `w` stops at
+        // `👍`, `❤` and `x`.
+        let mut state = EditorState::new(Lines::from("ok👍🏽 ❤\u{fe0f} x"));
+
+        for col in [2, 5, 8] {
+            MoveWordForward(1).execute(&mut state);
+            assert_eq!(state.cursor, Index2::new(0, col));
+        }
+    }
+
+    #[test]
+    fn test_character_classes_are_sorted() {
+        // `CharacterClass::from` binary-searches the ranges.
+        for (first, last, _) in CharacterClass::CLASSES {
+            assert!(first <= last, "{first:?}..={last:?}");
+        }
+        for pair in CharacterClass::CLASSES.windows(2) {
+            assert!(pair[0].1 < pair[1].0, "{pair:?}");
+        }
+    }
+
+    #[test]
     fn test_move_to_start() {
         let mut state = test_state();
         state.cursor = Index2::new(0, 2);
@@ -901,6 +1118,16 @@ mod tests {
     fn test_move_to_first() {
         let mut state = EditorState::new(Lines::from(" Hello"));
         state.cursor = Index2::new(0, 3);
+
+        MoveToFirst().execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 1));
+    }
+
+    #[test]
+    fn test_move_to_first_stops_at_ideographic_space() {
+        // Vim's `^` skips only spaces and tabs, unlike `w`.
+        let mut state = EditorState::new(Lines::from(" \u{3000}Hello"));
+        state.cursor = Index2::new(0, 4);
 
         MoveToFirst().execute(&mut state);
         assert_eq!(state.cursor, Index2::new(0, 1));

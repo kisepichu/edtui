@@ -1,7 +1,7 @@
 use jagged::index::RowIndex;
 use ratatui_core::{layout::Rect, text::Span};
 
-use crate::{EditorMode, EditorState, Index2, Lines};
+use crate::{actions::motion::CharacterClass, EditorMode, EditorState, Index2, Lines};
 
 /// Inserts a character into the lines data at the given `index`.
 pub(crate) fn insert_char(lines: &mut Lines, index: &mut Index2, ch: char, skip_move: bool) {
@@ -102,10 +102,12 @@ pub(crate) fn max_row(state: &EditorState) -> usize {
 }
 
 /// Skip whitespaces moving to the right. Stop at the end of the line.
+/// Whitespace is the class of word motions, which includes the no-break
+/// and ideographic spaces.
 pub(crate) fn skip_whitespace(lines: &Lines, index: &mut Index2) {
     if let Some(line) = lines.get(RowIndex::new(index.row)) {
-        for (i, &ch) in line.iter().enumerate().skip(index.col) {
-            if !ch.is_ascii_whitespace() {
+        for (i, ch) in line.iter().enumerate().skip(index.col) {
+            if CharacterClass::from(ch) != CharacterClass::Whitespace {
                 index.col = i;
                 break;
             }
@@ -124,11 +126,12 @@ pub(crate) fn skip_empty_lines(lines: &Lines, row_index: &mut usize) {
 }
 
 /// Skip whitespaces moving to the left. Stop at the start of the line.
+/// Whitespace is the class of word motions, as in [`skip_whitespace`].
 pub(crate) fn skip_whitespace_rev(lines: &Lines, index: &mut Index2) {
     if let Some(line) = lines.get(RowIndex::new(index.row)) {
         let skip = line.len().saturating_sub(index.col + 1);
-        for &ch in line.iter().rev().skip(skip) {
-            if !ch.is_ascii_whitespace() {
+        for ch in line.iter().rev().skip(skip) {
+            if CharacterClass::from(ch) != CharacterClass::Whitespace {
                 break;
             }
             index.col = index.col.saturating_sub(1);

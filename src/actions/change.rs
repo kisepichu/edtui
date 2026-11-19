@@ -198,6 +198,17 @@ mod tests {
     }
 
     #[test]
+    fn test_change_word_japanese() {
+        // Vim: `cw` on `日` changes `日本語`.
+        let mut state = EditorState::new(Lines::from("日本語のテキスト"));
+
+        ChangeWord(1).execute(&mut state);
+        assert_eq!(state.lines.to_string(), "のテキスト");
+        assert_eq!(state.cursor, Index2::new(0, 0));
+        assert_eq!(state.mode, EditorMode::Insert);
+    }
+
+    #[test]
     fn test_change_big_word_enters_insert_mode() {
         let mut state = EditorState::new(Lines::from("foo.bar baz"));
         state.cursor = Index2::new(0, 0);
