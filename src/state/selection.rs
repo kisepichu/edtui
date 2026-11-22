@@ -9,6 +9,9 @@ pub struct Selection {
     pub start: Index2,
     pub end: Index2,
     pub line_mode: bool,
+    /// Where a line selection started (where `V` was typed): its row stays
+    /// selected as the cursor moves, and `v` starts a character selection
+    /// there. A character selection starts at `start`.
     pub anchor: Option<Index2>,
 }
 

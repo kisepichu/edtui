@@ -41,7 +41,7 @@ pub use self::search::{
 };
 pub use self::select::{
     DeleteInnerBetween, DeleteInnerBigWord, DeleteInnerWord, SelectInnerBetween,
-    SelectInnerBigWord, SelectInnerWord, SelectLine,
+    SelectInnerBigWord, SelectInnerWord, SelectLine, SwitchToCharSelection, SwitchToLineSelection,
 };
 
 #[enum_dispatch(Execute)]
@@ -104,6 +104,8 @@ pub enum Action {
     DeleteInnerBigWord(DeleteInnerBigWord),
     ChangeSelection(ChangeSelection),
     SelectLine(SelectLine),
+    SwitchToCharSelection(SwitchToCharSelection),
+    SwitchToLineSelection(SwitchToLineSelection),
     Undo(Undo),
     Redo(Redo),
     RepeatLastChange(RepeatLastChange),

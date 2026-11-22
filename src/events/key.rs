@@ -23,7 +23,8 @@ use crate::actions::{
     MoveToMatchinBracket, MoveToStartOfLine, MoveUp, MoveWordBackward, MoveWordForward,
     MoveWordForwardToEndOfWord, Paste, PasteBefore, Redo, RemoveChar, RemoveCharFromSearch,
     RepeatLastChange, SelectCurrentSearch, SelectInnerBetween, SelectInnerBigWord, SelectInnerWord,
-    SelectLine, StopSearch, SwitchMode, TillForward, Undo,
+    SelectLine, StopSearch, SwitchMode, SwitchToCharSelection, SwitchToLineSelection, TillForward,
+    Undo,
 };
 use crate::events::KeyInput;
 use crate::{EditorMode, EditorState};
@@ -797,6 +798,15 @@ fn vim_keybindings() -> HashMap<KeyEventRegister, Action> {
         (
             KeyEventRegister::n(vec![KeyInput::shift('V')]),
             SelectLine.into(),
+        ),
+        // Switch between a character and a line selection
+        (
+            KeyEventRegister::v(vec![KeyInput::new('v')]),
+            SwitchToCharSelection.into(),
+        ),
+        (
+            KeyEventRegister::v(vec![KeyInput::shift('V')]),
+            SwitchToLineSelection.into(),
         ),
         // Undo
         (KeyEventRegister::n(vec![KeyInput::new('u')]), Undo.into()),
@@ -1619,6 +1629,39 @@ mod tests {
         handler.on_event(KeyInput::new('y'), &mut state);
         assert_eq!(state.clip.get_text(), "foo.bar(baz)");
         assert_eq!(state.mode, EditorMode::Normal);
+    }
+
+    #[test]
+    fn test_visual_v_and_capital_v_switch_the_selection_kind() {
+        use crate::state::selection::Selection;
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("one two\nthree four\nfive"));
+        let mut handler = KeyEventHandler::default();
+        state.cursor = Index2::new(0, 4);
+
+        // `vj` then `V` selects both lines whole.
+        handler.on_event(KeyInput::new('v'), &mut state);
+        handler.on_event(KeyInput::new('j'), &mut state);
+        handler.on_event(KeyInput::shift('V'), &mut state);
+        let selection = state.selection.clone().unwrap();
+        assert!(selection.line_mode);
+        assert_eq!(
+            (selection.start(), selection.end()),
+            (Index2::new(0, 0), Index2::new(1, 9))
+        );
+        // `V` again keeps the line selection, and visual mode.
+        handler.on_event(KeyInput::shift('V'), &mut state);
+        assert_eq!(state.selection, Some(selection));
+        assert_eq!(state.mode, EditorMode::Visual);
+
+        // `v` goes back to characters from the same start.
+        handler.on_event(KeyInput::new('v'), &mut state);
+        let want = Selection::new(Index2::new(0, 4), Index2::new(1, 4));
+        assert_eq!(state.selection, Some(want.clone()));
+        handler.on_event(KeyInput::new('v'), &mut state);
+        assert_eq!(state.selection, Some(want));
+        assert_eq!(state.mode, EditorMode::Visual);
     }
 
     #[test]

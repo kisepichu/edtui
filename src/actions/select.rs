@@ -2,7 +2,9 @@ use jagged::index::RowIndex;
 
 use super::{delete::delete_selection, motion::CharacterClass, Execute};
 use crate::{
-    clipboard::ClipboardTrait, state::selection::Selection, EditorMode, EditorState, Index2, Lines,
+    clipboard::ClipboardTrait,
+    state::selection::{set_selection_with_lines, Selection},
+    EditorMode, EditorState, Index2, Lines,
 };
 
 /// Selects text between specified delimiter characters.
@@ -232,8 +234,49 @@ impl Execute for SelectLine {
         if let Some(len_col) = state.lines.len_col(row) {
             let start = Index2::new(row, 0);
             let end = Index2::new(row, len_col.saturating_sub(1));
-            state.selection = Some(Selection::new(start, end).line_mode());
+            let mut selection = Selection::new(start, end).line_mode();
+            // The cursor's column too, for `v` (`SwitchToCharSelection`).
+            selection.anchor = Some(state.cursor);
+            state.selection = Some(selection);
             state.mode = EditorMode::Visual;
+        }
+    }
+}
+
+/// Turns a line selection into a character selection from where it started
+/// (where `V` was typed) to the cursor, as `v` does in Vim's linewise
+/// visual mode. A character selection stays as it is.
+#[derive(Clone, Debug, Copy)]
+pub struct SwitchToCharSelection;
+
+impl Execute for SwitchToCharSelection {
+    fn execute(&mut self, state: &mut EditorState) {
+        let Some(selection) = &mut state.selection else {
+            return;
+        };
+        if selection.line_mode {
+            let anchor = selection.anchor.unwrap_or(selection.start);
+            *selection = Selection::new(anchor, state.cursor);
+        }
+    }
+}
+
+/// Turns a character selection into a line selection over the rows from
+/// where it started to the cursor, as `V` does in Vim's characterwise
+/// visual mode. A line selection stays as it is.
+#[derive(Clone, Debug, Copy)]
+pub struct SwitchToLineSelection;
+
+impl Execute for SwitchToLineSelection {
+    fn execute(&mut self, state: &mut EditorState) {
+        let Some(selection) = &mut state.selection else {
+            return;
+        };
+        if !selection.line_mode {
+            // A character selection's start is where it started.
+            selection.anchor = Some(selection.start);
+            selection.line_mode = true;
+            set_selection_with_lines(&mut state.selection, state.cursor, &state.lines);
         }
     }
 }
@@ -276,7 +319,9 @@ mod tests {
         SelectLine.execute(&mut state);
 
         // Should have line 1 selected
-        let want = Some(Selection::new(Index2::new(1, 0), Index2::new(1, 10)).line_mode());
+        let mut want = Selection::new(Index2::new(1, 0), Index2::new(1, 10)).line_mode();
+        want.anchor = Some(Index2::new(1, 5));
+        let want = Some(want);
         assert_eq!(state.selection, want);
 
         // Move up to line 0 - should extend selection to cover both lines
@@ -574,5 +619,75 @@ mod tests {
 
         let want = Selection::new(Index2::new(0, 0), Index2::new(0, 6));
         assert_eq!(state.selection.unwrap(), want);
+    }
+
+    #[test]
+    fn test_switch_line_selection_to_char_selection() {
+        use crate::actions::motion::{MoveDown, MoveForward};
+
+        let mut state = EditorState::new(Lines::from("First line\nSecond line\nThird line"));
+        state.cursor = Index2::new(0, 3);
+        SelectLine.execute(&mut state);
+        MoveDown(1).execute(&mut state);
+        MoveForward(4).execute(&mut state);
+
+        // From where `V` was typed, column included, to the cursor.
+        SwitchToCharSelection.execute(&mut state);
+
+        let want = Selection::new(Index2::new(0, 3), Index2::new(1, 7));
+        assert_eq!(state.selection, Some(want));
+        assert_eq!(state.cursor, Index2::new(1, 7));
+        assert_eq!(state.mode, EditorMode::Visual);
+    }
+
+    #[test]
+    fn test_switch_char_selection_to_line_selection_and_back() {
+        use crate::actions::motion::{MoveDown, MoveForward, MoveUp};
+        use crate::actions::SwitchMode;
+
+        let mut state = EditorState::new(Lines::from("First line\nSecond line\nThird line"));
+        state.cursor = Index2::new(0, 3);
+        SwitchMode(EditorMode::Visual).execute(&mut state);
+        MoveDown(1).execute(&mut state);
+        MoveForward(4).execute(&mut state);
+
+        // Whole lines from the anchor's row to the cursor's.
+        SwitchToLineSelection.execute(&mut state);
+        let want = Selection {
+            start: Index2::new(0, 0),
+            end: Index2::new(1, 10),
+            line_mode: true,
+            anchor: Some(Index2::new(0, 3)),
+        };
+        assert_eq!(state.selection, Some(want));
+        assert_eq!(state.cursor, Index2::new(1, 7));
+
+        // The anchor stays put while the line selection follows the cursor,
+        // and `v` starts from it again.
+        MoveUp(1).execute(&mut state);
+        assert_eq!(state.cursor, Index2::new(0, 7));
+        SwitchToCharSelection.execute(&mut state);
+        let want = Selection::new(Index2::new(0, 3), Index2::new(0, 7));
+        assert_eq!(state.selection, Some(want));
+    }
+
+    #[test]
+    fn test_switch_to_the_same_selection_kind_keeps_the_selection() {
+        use crate::actions::motion::MoveForward;
+        use crate::actions::SwitchMode;
+
+        let mut state = EditorState::new(Lines::from("Hello World"));
+        state.cursor = Index2::new(0, 2);
+        SwitchMode(EditorMode::Visual).execute(&mut state);
+        MoveForward(3).execute(&mut state);
+        let chars = state.selection.clone();
+        SwitchToCharSelection.execute(&mut state);
+        assert_eq!(state.selection, chars);
+
+        SelectLine.execute(&mut state);
+        let lines = state.selection.clone();
+        SwitchToLineSelection.execute(&mut state);
+        assert_eq!(state.selection, lines);
+        assert_eq!(state.mode, EditorMode::Visual);
     }
 }

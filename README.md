@@ -220,6 +220,7 @@ falling back to a platform-specific default if neither is set.
 |---------------------------|----------------------------------------------------------|
 | `i`                       | Enter Insert mode                                        |
 | `v`                       | Enter Visual mode                                        |
+| `v`, `V` (Visual mode)    | Switch to a character / line selection                   |
 | `h`, `j`, `k`, `l`        | Navigate left, down, up, and right                       |
 | `w`                       | Move forward to the start of a word                      |
 | `e`                       | Move forward to the end of a word                        |
