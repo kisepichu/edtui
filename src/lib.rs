@@ -257,6 +257,7 @@
 //! | `ct` + `<char>`           | Change up to (but not including) the next `<char>`       |
 //! | `D`                       | Delete to the end of the line                            |
 //! | `viw`                     | Select between word.                                     |
+//! | `viW`                     | Select between WORD (whitespace-delimited)               |
 //! | `ciw`                     | Change between word.                                     |
 //! | `ciW`                     | Change between WORD (whitespace-delimited)               |
 //! | `vi` + `", ', (, [ or {`  | Select between delimiter `", ', (, [ or {`               |

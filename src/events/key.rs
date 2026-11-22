@@ -22,8 +22,8 @@ use crate::actions::{
     MoveParagraphBackward, MoveParagraphForward, MoveToEndOfLine, MoveToFirst,
     MoveToMatchinBracket, MoveToStartOfLine, MoveUp, MoveWordBackward, MoveWordForward,
     MoveWordForwardToEndOfWord, Paste, PasteBefore, Redo, RemoveChar, RemoveCharFromSearch,
-    RepeatLastChange, SelectCurrentSearch, SelectInnerBetween, SelectInnerWord, SelectLine,
-    StopSearch, SwitchMode, TillForward, Undo,
+    RepeatLastChange, SelectCurrentSearch, SelectInnerBetween, SelectInnerBigWord, SelectInnerWord,
+    SelectLine, StopSearch, SwitchMode, TillForward, Undo,
 };
 use crate::events::KeyInput;
 use crate::{EditorMode, EditorState};
@@ -581,6 +581,10 @@ fn vim_keybindings() -> HashMap<KeyEventRegister, Action> {
         (
             KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('w')]),
             SelectInnerWord.into(),
+        ),
+        (
+            KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::shift('W')]),
+            SelectInnerBigWord.into(),
         ),
         (
             KeyEventRegister::v(vec![KeyInput::new('i'), KeyInput::new('"')]),
@@ -1591,6 +1595,30 @@ mod tests {
         handler.on_event(KeyInput::new('o'), &mut state);
         assert_eq!(state.cursor, Index2::new(0, 3));
         assert!(state.selection.is_some());
+    }
+
+    #[test]
+    fn test_visual_inner_big_word_yanks_the_word() {
+        use crate::clipboard::{ClipboardTrait, InternalClipboard};
+        use crate::state::selection::Selection;
+        use crate::{EditorState, Index2, Lines};
+
+        let mut state = EditorState::new(Lines::from("see foo.bar(baz) now"));
+        state.set_clipboard(InternalClipboard::default());
+        let mut handler = KeyEventHandler::default();
+        state.cursor = Index2::new(0, 8);
+
+        // `viW` selects the WORD around the cursor, punctuation included,
+        // and `y` copies it.
+        handler.on_event(KeyInput::new('v'), &mut state);
+        handler.on_event(KeyInput::new('i'), &mut state);
+        handler.on_event(KeyInput::shift('W'), &mut state);
+        let want = Selection::new(Index2::new(0, 4), Index2::new(0, 15));
+        assert_eq!(state.selection, Some(want));
+
+        handler.on_event(KeyInput::new('y'), &mut state);
+        assert_eq!(state.clip.get_text(), "foo.bar(baz)");
+        assert_eq!(state.mode, EditorMode::Normal);
     }
 
     #[test]
